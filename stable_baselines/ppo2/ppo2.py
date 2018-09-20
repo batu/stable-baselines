@@ -10,7 +10,7 @@ from stable_baselines import logger
 from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
 from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import LstmPolicy, ActorCriticPolicy
-from stable_baselines.a2c.utils import total_episode_reward_logger
+from stable_baselines.a2c.utils import total_episode_reward_logger, total_episode_reward_and_average_length, average_episode_lengths
 
 
 class PPO2(ActorCriticRLModel):
@@ -261,7 +261,9 @@ class PPO2(ActorCriticRLModel):
             self.episode_reward = np.zeros((self.n_envs,))
 
             ep_info_buf = deque(maxlen=100)
+            episode_lengths_overflows = np.zeros(self.n_envs)
             t_first_start = time.time()
+
 
             nupdates = total_timesteps // self.n_batch
             for update in range(nupdates + 1):
@@ -314,6 +316,25 @@ class PPO2(ActorCriticRLModel):
                                                                       true_reward.reshape((self.n_envs, self.n_steps)),
                                                                       masks.reshape((self.n_envs, self.n_steps)),
                                                                       writer, update * (self.n_batch + 1))
+
+                else:
+                    episode_rewards, done_masks = total_episode_reward_and_average_length(
+                                                                      self.episode_reward,
+                                                                      true_reward.reshape((self.n_envs, self.n_steps)),
+                                                                      masks.reshape((self.n_envs, self.n_steps)))
+
+                    assert len(done_masks) == self.n_envs
+                    episode_lengths, episode_lengths_overflows = average_episode_lengths(episode_lengths_overflows,
+                                                                                         done_masks,
+                                                                                         self.env.max_episode_len)
+
+                    average_episode_reward = safe_mean(episode_rewards)
+                    average_episode_len = safe_mean(episode_lengths)
+
+                    ep_info = {'r' : average_episode_reward,
+                               'l' : average_episode_len}
+
+                    ep_info_buf.append(ep_info)
 
                 if callback is not None:
                     callback(locals(), globals())
