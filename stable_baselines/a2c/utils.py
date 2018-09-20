@@ -588,7 +588,7 @@ def total_episode_reward_logger(rew_acc, rewards, masks, writer, steps):
 
     return rew_acc
 
-def total_episode_reward_and_average_length(rew_acc, rewards, masks):
+def calculate_total_episode_reward(rew_acc, rewards, masks):
     """
     calculates the cumulated episode reward, and prints to tensorflow log the output
 
@@ -598,10 +598,8 @@ def total_episode_reward_and_average_length(rew_acc, rewards, masks):
     :return: (np.array float) the updated total running reward
     :return: (np.array float) the updated average episode length
     """
-    done_masks = []
     for env_idx in range(rewards.shape[0]):
-        dones_idx = np.argwhere(masks[env_idx])
-        done_masks.append(dones_idx)
+        dones_idx =  np.sort(np.argwhere(masks[env_idx]))
         if len(dones_idx) == 0:
             rew_acc[env_idx] += sum(rewards[env_idx])
         else:
@@ -609,40 +607,4 @@ def total_episode_reward_and_average_length(rew_acc, rewards, masks):
             for k in range(1, len(dones_idx[:, 0])):
                 rew_acc[env_idx] = sum(rewards[env_idx, dones_idx[k-1, 0]:dones_idx[k, 0]])
             rew_acc[env_idx] = sum(rewards[env_idx, dones_idx[-1, 0]:])
-    return rew_acc, done_masks
-
-def average_episode_lengths(episode_lengths_overflows, masks, max_episode_len):
-    """
-    calculates the average episode lenght
-
-    :param episode_lengths_overflows: (np.array float) the overflowed stepcount from the last calculation
-    :param masks: (np.array bool) masks of at which timestep an episode is done.
-    :param n_steps: (int) The number of steps to run for each environment per update
-    :return: (np.array float) the lenghts of
-    :return: (np.array float) the updated average episode length
-    """ 
-    #All calculated episode lenghts from the current update run.
-    episode_lengths= []
-
-    # There are an overflow value for each environment.
-    # This loop considers each environment
-    for i, overflow_value in enumerate(episode_lengths_overflows):
-        # if that particular environment doesnt have any end of episodes.
-        # if there are no entries in the mask, then
-        if not any(masks[i]):
-            episode_lengths_overflows[i] += max_episode_len
-            episode_lengths.append(max_episode_len)
-            continue
-
-        # An episode passed between the first done in the current max
-        # and the value stored in the overflow_value, add that to the list.
-        wrap_around_episode_len = (max_episode_len - overflow_value) + masks[i][0]
-        episode_lengths.append(wrap_around_episode_len)
-
-        # Take the difference between two consequtive Trues in the masks
-        # which shows the episode length.
-        for run_index in range(1, len(masks[i]) - 1):
-            run_length = masks[i][run_index + 1] - masks[i][run_index]
-            episode_lengths.append(run_length)
-        episode_lengths_overflows[i] = masks[i][-1]
-    return episode_lengths, episode_lengths_overflows
+    return rew_acc
