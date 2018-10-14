@@ -13,12 +13,13 @@ from stable_baselines.bench import Monitor
 from stable_baselines.common import set_global_seeds
 from stable_baselines.common.atari_wrappers import make_atari, wrap_deepmind
 from stable_baselines.common.vec_env.subproc_vec_env import SubprocVecEnv
+from stable_baselines.common.vec_env import  SnapshotVecEnv
 
 
 def make_atari_env(env_id, num_env, seed, wrapper_kwargs=None, start_index=0, allow_early_resets=True):
     """
     Create a wrapped, monitored SubprocVecEnv for Atari.
-    
+
     :param env_id: (str) the environment ID
     :param num_env: (int) the number of environment you wish to have in subprocesses
     :param seed: (int) the inital seed for RNG
@@ -41,11 +42,39 @@ def make_atari_env(env_id, num_env, seed, wrapper_kwargs=None, start_index=0, al
     set_global_seeds(seed)
     return SubprocVecEnv([make_env(i + start_index) for i in range(num_env)])
 
+def make_atari_snapshot_env(env_id, num_env, seed, wrapper_kwargs=None, start_index=0, allow_early_resets=True, snapshot_save_prob=0, snapshot_load_prob=0):
+    """
+    Create a wrapped, monitored SubprocVecEnv for Atari.
+
+    :param env_id: (str) the environment ID
+    :param num_env: (int) the number of environment you wish to have in subprocesses
+    :param seed: (int) the inital seed for RNG
+    :param wrapper_kwargs: (dict) the parameters for wrap_deepmind function
+    :param start_index: (int) start rank index
+    :param allow_early_resets: (bool) allows early reset of the environment
+    :return: (Gym Environment) The atari environment
+    """
+    if wrapper_kwargs is None:
+        wrapper_kwargs = {}
+
+
+    def make_env(rank):
+        def _thunk():
+            env = make_atari(env_id)
+            env.seed(seed + rank)
+            env = Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)),
+                          allow_early_resets=allow_early_resets)
+            return wrap_deepmind(env, **wrapper_kwargs)
+        return _thunk
+    set_global_seeds(seed)
+    return SnapshotVecEnv([make_env(i + start_index) for i in range(num_env)],
+                           snapshot_save_prob=snapshot_save_prob,
+                           snapshot_load_prob=snapshot_load_prob)
 
 def make_mujoco_env(env_id, seed, allow_early_resets=True):
     """
     Create a wrapped, monitored gym.Env for MuJoCo.
-    
+
     :param env_id: (str) the environment ID
     :param seed: (int) the inital seed for RNG
     :param allow_early_resets: (bool) allows early reset of the environment
@@ -62,7 +91,7 @@ def make_mujoco_env(env_id, seed, allow_early_resets=True):
 def make_robotics_env(env_id, seed, rank=0, allow_early_resets=True):
     """
     Create a wrapped, monitored gym.Env for MuJoCo.
-    
+
     :param env_id: (str) the environment ID
     :param seed: (int) the inital seed for RNG
     :param rank: (int) the rank of the environment (for logging)
@@ -82,7 +111,7 @@ def make_robotics_env(env_id, seed, rank=0, allow_early_resets=True):
 def arg_parser():
     """
     Create an empty argparse.ArgumentParser.
-    
+
     :return: (ArgumentParser)
     """
     import argparse
@@ -92,7 +121,7 @@ def arg_parser():
 def atari_arg_parser():
     """
     Create an argparse.ArgumentParser for run_atari.py.
-    
+
     :return: (ArgumentParser) parser {'--env': 'BreakoutNoFrameskip-v4', '--seed': 0, '--num-timesteps': int(1e7)}
     """
     parser = arg_parser()
@@ -105,7 +134,7 @@ def atari_arg_parser():
 def mujoco_arg_parser():
     """
     Create an argparse.ArgumentParser for run_mujoco.py.
-    
+
     :return:  (ArgumentParser) parser {'--env': 'Reacher-v2', '--seed': 0, '--num-timesteps': int(1e6), '--play': False}
     """
     parser = arg_parser()
@@ -119,7 +148,7 @@ def mujoco_arg_parser():
 def robotics_arg_parser():
     """
     Create an argparse.ArgumentParser for run_mujoco.py.
-    
+
     :return: (ArgumentParser) parser {'--env': 'FetchReach-v0', '--seed': 0, '--num-timesteps': int(1e6)}
     """
     parser = arg_parser()

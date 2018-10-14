@@ -81,7 +81,8 @@ class Monitor(Wrapper):
         :param action: ([int] or [float]) the action
         :return: ([int] or [float], [float], [bool], dict) observation, reward, done, information
         """
-        if self.needs_reset:
+        # !!! COME BACK where
+        if self.needs_reset :
             raise RuntimeError("Tried to step environment that needs reset")
         observation, reward, done, info = self.env.step(action)
         self.rewards.append(reward)

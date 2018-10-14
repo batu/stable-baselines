@@ -1,5 +1,6 @@
 import numpy as np
 from gym import spaces
+import inspect
 
 from stable_baselines.common.vec_env import VecEnvWrapper
 
@@ -11,7 +12,7 @@ class VecFrameStack(VecEnvWrapper):
     :param venv: (VecEnv) the vectorized environment to wrap
     :param n_stack: (int) Number of frames to stack
     """
-    
+
     def __init__(self, venv, n_stack):
         self.venv = venv
         self.n_stack = n_stack
@@ -21,6 +22,10 @@ class VecFrameStack(VecEnvWrapper):
         self.stackedobs = np.zeros((venv.num_envs,) + low.shape, low.dtype)
         observation_space = spaces.Box(low=low, high=high, dtype=venv.observation_space.dtype)
         VecEnvWrapper.__init__(self, venv, observation_space=observation_space)
+        venv.frame_stack_pointer = self
+
+    def _get_obs(self, env_id):
+        return self.stackedobs[env_id]
 
     def step_wait(self):
         observations, rewards, dones, infos = self.venv.step_wait()
@@ -29,12 +34,18 @@ class VecFrameStack(VecEnvWrapper):
             if done:
                 self.stackedobs[i] = 0
         self.stackedobs[..., -observations.shape[-1]:] = observations
+        # curframe = inspect.currentframe()
+        # calframe = inspect.getouterframes(curframe, 2)
+        # print('caller name:', calframe[1][3])
+        # print(calframe[1])
+        # exit()
         return self.stackedobs, rewards, dones, infos
 
     def reset(self):
         """
         Reset all environments
         """
+        print("Reset??!!!!!")
         obs = self.venv.reset()
         self.stackedobs[...] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs

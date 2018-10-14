@@ -1,8 +1,11 @@
 from collections import deque
+from pickle import dumps,loads
 
 import numpy as np
 import gym
 from gym import spaces
+
+import inspect
 import cv2
 cv2.ocl.setUseOpenCL(False)
 
@@ -39,6 +42,109 @@ class NoopResetEnv(gym.Wrapper):
     def step(self, action):
         return self.env.step(action)
 
+class SnapshotEnv(gym.Wrapper):
+    def __init__(self, env_fns):
+        self.envs = [fn() for fn in env_fns]
+        env = self.envs[0]
+        VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
+        shapes, dtypes = {}, {}
+        self.keys = []
+        obs_space = env.observation_space
+
+        if isinstance(obs_space, spaces.Dict):
+            assert isinstance(obs_space.spaces, OrderedDict)
+            subspaces = obs_space.spaces
+        else:
+            subspaces = {None: obs_space}
+
+        for key, box in subspaces.items():
+            shapes[key] = box.shape
+            dtypes[key] = box.dtype
+            self.keys.append(key)
+
+        self.buf_obs = {k: np.zeros((self.num_envs,) + tuple(shapes[k]), dtype=dtypes[k]) for k in self.keys}
+        self.buf_dones = np.zeros((self.num_envs,), dtype=np.bool)
+        self.buf_rews = np.zeros((self.num_envs,), dtype=np.float32)
+        self.buf_infos = [{} for _ in range(self.num_envs)]
+        self.actions = None
+
+    # From https://github.com/openai/gym/pull/575
+
+    def get_snapshot(self):
+        """
+       :returns: environment state that can be loaded with load_snapshot
+       Snapshots guarantee same env behaviour each time they are loaded.
+
+       Warning! Snapshots can be arbitrary things (strings, integers, json, tuples)
+       Don't count on them being pickle strings when implementing MCTS.
+
+       Developer Note: Make sure the object you return will not be affected by
+       anything that happens to the environment after it's saved.
+       You shouldn't, for example, return selfs.env.
+       In case of doubt, use pickle.dumps or deepcopy.
+
+       """
+        print("Get snapshot is called.")
+        #self.envs[0].render() #close popup windows since we can't pickle them
+        #self.envs[0].close()
+        return dumps(self.envs[0].env)
+
+    def load_snapshot(self,snapshot):
+        """
+       Loads snapshot as current env state.
+       Should not change snapshot inplace (in case of doubt, deepcopy).
+       """
+        print("Get load is called.")
+        assert not hasattr(self,"_monitor") or hasattr(self.envs[0].env,"_monitor"), "can't backtrack while recording"
+
+        #self.envs[0].render() #close popup windows since we can't load into them
+        #self.envs[0].close()
+        self.envs[0].env = loads(snapshot)
+
+    def step_async(self, actions):
+        self.actions = actions
+
+    def step_wait(self):
+        for env_idx in range(self.num_envs):
+            obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
+                self.envs[env_idx].step(self.actions[env_idx])
+            if self.buf_dones[env_idx]:
+                obs = self.envs[env_idx].reset()
+            self._save_obs(env_idx, obs)
+        return (np.copy(self._obs_from_buf()), np.copy(self.buf_rews), np.copy(self.buf_dones),
+                self.buf_infos.copy())
+
+    def reset(self):
+        print("reset snapshot is called.")
+        for env_idx in range(self.num_envs):
+            obs = self.envs[env_idx].reset()
+            self._save_obs(env_idx, obs)
+        return np.copy(self._obs_from_buf())
+
+    def close(self):
+        return
+
+    def get_images(self):
+        return [env.render(mode='rgb_array') for env in self.envs]
+
+    def render(self, *args, **kwargs):
+        if self.num_envs == 1:
+            return self.envs[0].render(*args, **kwargs)
+        else:
+            return super().render(*args, **kwargs)
+
+    def _save_obs(self, env_idx, obs):
+        for key in self.keys:
+            if key is None:
+                self.buf_obs[key][env_idx] = obs
+            else:
+                self.buf_obs[key][env_idx] = obs[key]
+
+    def _obs_from_buf(self):
+        if self.keys == [None]:
+            return self.buf_obs[None]
+        else:
+            return self.buf_obs
 
 class FireResetEnv(gym.Wrapper):
     def __init__(self, env):
@@ -189,6 +295,11 @@ class WarpFrame(gym.ObservationWrapper):
         :param frame: ([int] or [float]) environment frame
         :return: ([int] or [float]) the observation
         """
+        # curframe = inspect.currentframe()
+        # calframe = inspect.getouterframes(curframe, 2)
+        # print('caller name:', calframe[1][3])
+        # print(calframe[1])
+        # exit()
         frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_AREA)
         return frame[:, :, None]

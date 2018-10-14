@@ -1,20 +1,20 @@
 import time
+from collections import deque
 import sys
 import multiprocessing
-from collections import deque
 
-import gym
 import numpy as np
 import tensorflow as tf
 
 from stable_baselines import logger
+from stable_baselines.common.vec_env import SnapshotVecEnv
 from stable_baselines.common import explained_variance, ActorCriticRLModel, tf_util, SetVerbosity, TensorboardWriter
 from stable_baselines.common.runners import AbstractEnvRunner
 from stable_baselines.common.policies import LstmPolicy, ActorCriticPolicy
-from stable_baselines.a2c.utils import total_episode_reward_logger
+from stable_baselines.a2c.utils import total_episode_reward_logger, calculate_total_episode_reward
 
 
-class PPO2(ActorCriticRLModel):
+class PPO2_SH(ActorCriticRLModel):
     """
     Proximal Policy Optimization algorithm (GPU version).
     Paper: https://arxiv.org/abs/1707.06347
@@ -40,9 +40,9 @@ class PPO2(ActorCriticRLModel):
 
     def __init__(self, policy, env, gamma=0.99, n_steps=128, ent_coef=0.01, learning_rate=2.5e-4, vf_coef=0.5,
                  max_grad_norm=0.5, lam=0.95, nminibatches=4, noptepochs=4, cliprange=0.2, verbose=0,
-                 tensorboard_log=None, _init_setup_model=True):
+                 tensorboard_log=None, _init_setup_model=True, visualize=False, snapshot_load_prob=0.05, snapshot_save_prob=0.05):
 
-        super(PPO2, self).__init__(policy=policy, env=env, verbose=verbose, requires_vec_env=True,
+        super(PPO2_SH, self).__init__(policy=policy, env=env, verbose=verbose, requires_vec_env=True,
                                    _init_setup_model=_init_setup_model)
 
         if isinstance(learning_rate, float):
@@ -65,6 +65,9 @@ class PPO2(ActorCriticRLModel):
         self.nminibatches = nminibatches
         self.noptepochs = noptepochs
         self.tensorboard_log = tensorboard_log
+        self.visualize = visualize
+        self.snapshot_details = {"save_prob": snapshot_save_prob,
+                                 "load_prob": snapshot_load_prob}
 
         self.graph = None
         self.sess = None
@@ -97,6 +100,15 @@ class PPO2(ActorCriticRLModel):
             self.setup_model()
 
     def setup_model(self):
+
+
+        print(self.env)
+        # Snapshot
+        #for env in self.envs:
+        self.env.set_snapshot_probabilities(self.snapshot_details["save_prob"],
+                                            self.snapshot_details["load_prob"])
+
+
         with SetVerbosity(self.verbose):
 
             assert issubclass(self.policy, ActorCriticPolicy), "Error: the input policy for the PPO2 model must be " \
@@ -254,15 +266,16 @@ class PPO2(ActorCriticRLModel):
 
         return policy_loss, value_loss, policy_entropy, approxkl, clipfrac
 
-    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO2"):
+    def learn(self, total_timesteps, callback=None, seed=None, log_interval=100, tb_log_name="PPO2_SH"):
         with SetVerbosity(self.verbose), TensorboardWriter(self.graph, self.tensorboard_log, tb_log_name) as writer:
             self._setup_learn(seed)
 
-            runner = Runner(env=self.env, model=self, n_steps=self.n_steps, gamma=self.gamma, lam=self.lam)
+            runner = Runner(env=self.env, model=self, n_steps=self.n_steps, gamma=self.gamma, lam=self.lam, visualize=self.visualize, snapshot_details=self.snapshot_details)
             self.episode_reward = np.zeros((self.n_envs,))
 
             ep_info_buf = deque(maxlen=100)
             t_first_start = time.time()
+
 
             nupdates = total_timesteps // self.n_batch
             for update in range(nupdates + 1):
@@ -316,6 +329,15 @@ class PPO2(ActorCriticRLModel):
                                                                       masks.reshape((self.n_envs, self.n_steps)),
                                                                       writer, update * (self.n_batch + 1))
 
+
+                all_env_episode_rewards = calculate_total_episode_reward(self.episode_reward,
+                                                                 true_reward.reshape((self.n_envs, self.n_steps)),
+                                                                 masks.reshape((self.n_envs, self.n_steps)))
+                average_episode_reward = safe_mean(all_env_episode_rewards)
+                ep_info = {'r' : average_episode_reward,
+                           'l' : np.nan}
+                ep_info_buf.append(ep_info)
+
                 if callback is not None:
                     callback(locals(), globals())
 
@@ -361,7 +383,7 @@ class PPO2(ActorCriticRLModel):
 
 
 class Runner(AbstractEnvRunner):
-    def __init__(self, *, env, model, n_steps, gamma, lam):
+    def __init__(self, *, env, model, n_steps, gamma, lam, visualize, snapshot_details):
         """
         A runner to learn the policy of an environment for a model
 
@@ -372,8 +394,19 @@ class Runner(AbstractEnvRunner):
         :param lam: (float) Factor for trade-off of bias vs variance for Generalized Advantage Estimator
         """
         super().__init__(env=env, model=model, n_steps=n_steps)
+        if snapshot_details:
+            assert isinstance(self.env, SnapshotVecEnv), "The environment needs to be a SnapshotEnv!"
+            self.snapshot_buffer = deque(maxlen=10)
+            self.snapshot_save_prob = snapshot_details["save_prob"]
+            self.snapshot_load_prob = snapshot_details["load_prob"]
+            self.snapshot_buffer.append(self.env.get_snapshot())
+        else:
+            self.snapshot_save_prob = 0
+            self.snapshot_load_prob = 0
+
         self.lam = lam
         self.gamma = gamma
+        self.visualize = visualize
 
     def run(self):
         """
@@ -394,22 +427,37 @@ class Runner(AbstractEnvRunner):
         mb_states = self.states
         ep_infos = []
         for _ in range(self.n_steps):
+            # The step function is created from the policy
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)
             mb_neglogpacs.append(neglogpacs)
             mb_dones.append(self.dones)
-            clipped_actions = actions
-            # Clip the actions to avoid out of bound error
-            if isinstance(self.env.action_space, gym.spaces.Box):
-                clipped_actions = np.clip(actions, self.env.action_space.low, self.env.action_space.high)
-            self.obs[:], rewards, self.dones, infos = self.env.step(clipped_actions)
+            self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+
+
+            #snapshot related concepts
+            if np.random.random() < self.snapshot_save_prob:
+                self.env.save_snapshot()
+            #     self.snapshot_buffer.append(snapshot)
+                # print("saved?")
+            #
+            #
+            # if np.random.random() < self.snapshot_load_prob:
+            #     snapshot = np.random.choice(list(self.snapshot_buffer))
+            #     self.env.load_snapshot(snapshot)
+            #     # print("load?")
+
+            if self.visualize:
+                self.env.render()
+
             for info in infos:
                 maybeep_info = info.get('episode')
                 if maybeep_info:
                     ep_infos.append(maybeep_info)
             mb_rewards.append(rewards)
+
         # batch of steps to batch of rollouts
         mb_obs = np.asarray(mb_obs, dtype=self.obs.dtype)
         mb_rewards = np.asarray(mb_rewards, dtype=np.float32)
