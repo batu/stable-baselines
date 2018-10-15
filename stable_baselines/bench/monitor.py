@@ -74,6 +74,7 @@ class Monitor(Wrapper):
             self.current_reset_info[key] = value
         return self.env.reset(**kwargs)
 
+
     def step(self, action):
         """
         Step the environment with the given action

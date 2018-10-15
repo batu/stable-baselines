@@ -5,6 +5,7 @@ import inspect
 import numpy as np
 from gym import spaces
 
+import time
 from pickle import dumps,loads
 from collections import namedtuple
 
@@ -18,7 +19,7 @@ class SnapshotVecEnv(VecEnv):
     :param env_fns: ([Gym Environment]) the list of environments to vectorize
     """
 
-    def __init__(self, env_fns, snapshot_save_prob=0, snapshot_load_prob=0, verbose=0, visualize=False):
+    def __init__(self, env_fns, snapshot_save_prob=0, snapshot_load_prob=0, verbose=1, visualize=False):
         self.envs = [fn() for fn in env_fns]
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
@@ -93,8 +94,8 @@ class SnapshotVecEnv(VecEnv):
         #self.envs[0].render() #close popup windows since we can't load into them
         self.envs[env_id].close()
         self.envs[env_id].env = loads(snapshot)
-        if self.verbose:
-            print("Loaded.")
+        #if self.verbose:
+            #print("Loaded.")
 
 
     def step_async(self, actions):
@@ -118,35 +119,39 @@ class SnapshotVecEnv(VecEnv):
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
                         self.load_snapshot(snapshot, env_idx)
+                        print(f"Snapshot index {index} was chosen with state \n")
 
-                        current_image = self.envs[env_idx].env.unwrapped._get_image()
-                        obs = self.envs[env_idx].env.env.observation(current_image)
-                        print(self.envs[env_idx].env.env.env.env)
-                        self.envs[env_idx].env.env.env.env.env.needs_reset = False
-                        # obs = self.frame_stack_pointer._get_obs(env_idx)
-                        # obs = self.envs[env_idx].unwrapped.frame_stack_pointer._get_obs()
-                        # print(f"Snapshot index {index} was chosen with state \n{obs}")
+                        # Take a noop action
+                        # This is not ideal but trying out as a shorthand.
+                        #print(self.envs[env_idx].env.env.env.env.env)
+                        # Reaching into monitor.
+                        # Make these into cleaner loops.
+                        self.envs[env_idx].env.env.env.env.env.needs_reset = False;
+                        self.envs[env_idx].env.env.env.env.env.rewards = []
+
+                        #Reaching into TimeLimit
+                        self.envs[env_idx].env.env.env.env.env.env.env.env._episode_started_at = time.time()
+                        self.envs[env_idx].env.env.env.env.env.env.env.env._elapsed_steps = 0
+
+                        obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
+                            self.envs[env_idx].step(0)
+
                         if type(obs) == type(None):
                             obs = self.envs[env_idx].reset()
                     else:
                         obs = self.envs[env_idx].reset()
-
+                #If it is not atari.
                 else:
                     if any(self.envs[env_idx].env.state) and (np.random.random() < self.snapshot_load_prob):
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
                         self.load_snapshot(snapshot, env_idx)
-                        obs = self.envs[env_idx].env.state
                         # print(f"Snapshot index {index} was chosen with state \n{obs}")
+                        obs = self.envs[env_idx].env.state
                         if type(obs) == type(None):
                             obs = self.envs[env_idx].reset()
                     else:
                         obs = self.envs[env_idx].reset()
-
-            # curframe = inspect.currentframe()
-            # calframe = inspect.getouterframes(curframe, 2)
-            # print(calframe[1])
-
             self._save_obs(env_idx, obs)
         return (np.copy(self._obs_from_buf()), np.copy(self.buf_rews), np.copy(self.buf_dones),
                 self.buf_infos.copy())
