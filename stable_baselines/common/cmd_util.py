@@ -44,7 +44,7 @@ def make_atari_env(env_id, num_env, seed, wrapper_kwargs=None, start_index=0, al
 
 def make_atari_snapshot_env(env_id, num_env, seed, wrapper_kwargs=None, start_index=0, allow_early_resets=True, snapshot_save_prob=0, snapshot_load_prob=0):
     """
-    Create a wrapped, monitored SubprocVecEnv for Atari.
+    Create a wrapped, monitored SnapshotVecEnv for Atari.
 
     :param env_id: (str) the environment ID
     :param num_env: (int) the number of environment you wish to have in subprocesses
@@ -62,6 +62,7 @@ def make_atari_snapshot_env(env_id, num_env, seed, wrapper_kwargs=None, start_in
         def _thunk():
             env = make_atari(env_id)
             env.seed(seed + rank)
+
             env = Monitor(env, logger.get_dir() and os.path.join(logger.get_dir(), str(rank)),
                           allow_early_resets=allow_early_resets)
             return wrap_deepmind(env, **wrapper_kwargs)

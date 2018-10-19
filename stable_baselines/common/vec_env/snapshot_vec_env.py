@@ -1,12 +1,14 @@
 from collections import OrderedDict
 from collections import deque
 import inspect
+import sys
 
 import numpy as np
 from gym import spaces
 
 import time
 from pickle import dumps,loads
+import cloudpickle
 from collections import namedtuple
 
 from . import VecEnv
@@ -48,6 +50,7 @@ class SnapshotVecEnv(VecEnv):
         self.is_env_atari = "AtariEnv" in str(self.envs[0].unwrapped)
         self.snapshot_save_prob = snapshot_save_prob
         self.snapshot_load_prob = snapshot_load_prob
+        self.first_time = True
         self.verbose = verbose
         self.visualize = visualize
 
@@ -58,6 +61,7 @@ class SnapshotVecEnv(VecEnv):
 
 
     def save_snapshot(self, env_id=0):
+        # start_time = time.time()
         snapshot = self.get_snapshot(env_id)
         self.snapshot_buffer.append(snapshot)
         if self.verbose:
@@ -79,8 +83,8 @@ class SnapshotVecEnv(VecEnv):
        """
         # print("Get snapshot is called.")
         #self.envs[0].render() #close popup windows since we can't pickle them
-        self.envs[env_id].close()
-        return dumps(self.envs[env_id])
+        #self.envs[env_id].close()
+        return cloudpickle.dumps(self.envs[env_id])
 
     def load_snapshot(self,snapshot, env_id=0):
         """
@@ -92,8 +96,11 @@ class SnapshotVecEnv(VecEnv):
 
         # print("Load snapshot is called.")
         #self.envs[0].render() #close popup windows since we can't load into them
-        self.envs[env_id].close()
+        # self.envs[env_id].close()
+        # start_time = time.time()
         self.envs[env_id].env = loads(snapshot)
+        # print (time.time() - start_time, 's in LOAD')
+
         #if self.verbose:
             #print("Loaded.")
 
@@ -105,21 +112,26 @@ class SnapshotVecEnv(VecEnv):
         for env_idx in range(self.num_envs):
             obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
                 self.envs[env_idx].step(self.actions[env_idx])
+
             if self.visualize:
                 self.envs[env_idx].render()
 
-            if np.random.random() < self.snapshot_save_prob:
+            if (np.random.random() < self.snapshot_save_prob) and (not self.buf_dones[env_idx]):
                 self.save_snapshot(env_idx)
+                #self.record_checkpoint(obs)
 
             if self.buf_dones[env_idx]:
                 # This code is for Physics based environments
                 # If we can get the state and the load prob kicked in
                 if self.is_env_atari:
-                    if (np.random.random() < self.snapshot_load_prob):
+                    if (not self.first_time and np.random.random() < self.snapshot_load_prob):
+                        self.first_time = False
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
+                        # print("SIZE:")
+                        # print(sys.getsizeof(snapshot))
                         self.load_snapshot(snapshot, env_idx)
-                        print(f"Snapshot index {index} was chosen with state \n")
+                        # print(f"Snapshot index {index} was chosen with state \n")
 
                         # Take a noop action
                         # This is not ideal but trying out as a shorthand.
@@ -142,12 +154,16 @@ class SnapshotVecEnv(VecEnv):
                         obs = self.envs[env_idx].reset()
                 #If it is not atari.
                 else:
-                    if any(self.envs[env_idx].env.state) and (np.random.random() < self.snapshot_load_prob):
+                    if (not self.first_time and np.random.random() < self.snapshot_load_prob):
+                        self.first_time = False
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
                         self.load_snapshot(snapshot, env_idx)
+                        self.envs[env_idx].env._episode_started_at = time.time()
+                        self.envs[env_idx].env._elapsed_steps = 0
+
                         # print(f"Snapshot index {index} was chosen with state \n{obs}")
-                        obs = self.envs[env_idx].env.state
+                        obs = self.envs[env_idx].unwrapped.state
                         if type(obs) == type(None):
                             obs = self.envs[env_idx].reset()
                     else:
@@ -155,6 +171,12 @@ class SnapshotVecEnv(VecEnv):
             self._save_obs(env_idx, obs)
         return (np.copy(self._obs_from_buf()), np.copy(self.buf_rews), np.copy(self.buf_dones),
                 self.buf_infos.copy())
+
+    def record_checkpoint(self, obs):
+        with open("mountaincar_sh_data_2.txt", 'a+') as file:
+            x1 = str(obs[0])
+            x2 = str(obs[1])
+            file.write(f"{x1},{x2}\n")
 
     def reset(self):
         for env_idx in range(self.num_envs):

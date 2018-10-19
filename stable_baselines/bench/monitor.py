@@ -15,7 +15,7 @@ import pandas
 class Monitor(Wrapper):
     EXT = "monitor.csv"
     file_handler = None
-
+    modified = False
     def __init__(self, env, filename, allow_early_resets=False, reset_keywords=(), info_keywords=()):
         """
         A monitor wrapper for Gym environments, it is used to know the episode reward, length, time and other data.
@@ -37,13 +37,18 @@ class Monitor(Wrapper):
                     filename = os.path.join(filename, Monitor.EXT)
                 else:
                     filename = filename + "." + Monitor.EXT
+            self.filename = filename
             self.file_handler = open(filename, "wt")
             self.file_handler.write('#%s\n' % json.dumps({"t_start": self.t_start, 'env_id': env.spec and env.spec.id}))
             self.logger = csv.DictWriter(self.file_handler,
                                          fieldnames=('r', 'l', 't') + reset_keywords + info_keywords)
             self.logger.writeheader()
             self.file_handler.flush()
+            if Monitor.modified:
+                self.file_handler.close()
+                self.delete_vars_for_pickle()
 
+        self.file_handler
         self.reset_keywords = reset_keywords
         self.info_keywords = info_keywords
         self.allow_early_resets = allow_early_resets
@@ -74,6 +79,18 @@ class Monitor(Wrapper):
             self.current_reset_info[key] = value
         return self.env.reset(**kwargs)
 
+    def open_file(self):
+        self.file_handler = open(self.filename, "a+")
+        self.logger = csv.DictWriter(self.file_handler,
+                                     fieldnames=('r', 'l', 't') + self.reset_keywords + self.info_keywords)
+        self.file_handler.flush()
+        return
+
+    def delete_vars_for_pickle(self):
+        self.close()
+        del self.file_handler
+        del self.logger
+        return
 
     def step(self, action):
         """
@@ -83,8 +100,12 @@ class Monitor(Wrapper):
         :return: ([int] or [float], [float], [bool], dict) observation, reward, done, information
         """
         # !!! COME BACK where
+        # if self.needs_reset :
+        #     raise RuntimeError("Tried to step environment that needs reset")
+
         if self.needs_reset :
-            raise RuntimeError("Tried to step environment that needs reset")
+            print("Tried to step environment that needs reset")
+            observation, reward, done, info = self.env.reset()
         observation, reward, done, info = self.env.step(action)
         self.rewards.append(reward)
         if done:
@@ -98,9 +119,13 @@ class Monitor(Wrapper):
             self.episode_lengths.append(eplen)
             self.episode_times.append(time.time() - self.t_start)
             ep_info.update(self.current_reset_info)
+            if Monitor.modified:
+                self.open_file()
             if self.logger:
                 self.logger.writerow(ep_info)
                 self.file_handler.flush()
+            if Monitor.modified:
+                self.delete_vars_for_pickle()
             info['episode'] = ep_info
         self.total_steps += 1
         return observation, reward, done, info
