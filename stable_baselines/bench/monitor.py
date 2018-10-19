@@ -15,7 +15,7 @@ import pandas
 class Monitor(Wrapper):
     EXT = "monitor.csv"
     file_handler = None
-    modified = False
+    modified = True
     def __init__(self, env, filename, allow_early_resets=False, reset_keywords=(), info_keywords=()):
         """
         A monitor wrapper for Gym environments, it is used to know the episode reward, length, time and other data.
@@ -102,7 +102,6 @@ class Monitor(Wrapper):
         # !!! COME BACK where
         # if self.needs_reset :
         #     raise RuntimeError("Tried to step environment that needs reset")
-
         if self.needs_reset :
             print("Tried to step environment that needs reset")
             observation, reward, done, info = self.env.reset()
