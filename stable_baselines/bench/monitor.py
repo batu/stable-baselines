@@ -16,7 +16,7 @@ class Monitor(Wrapper):
     EXT = "monitor.csv"
     file_handler = None
     modified = True
-    def __init__(self, env, filename, allow_early_resets=False, reset_keywords=(), info_keywords=()):
+    def __init__(self, env, filename, allow_early_resets=False, reset_keywords=(), info_keywords=(), modified=True):
         """
         A monitor wrapper for Gym environments, it is used to know the episode reward, length, time and other data.
 
@@ -27,6 +27,7 @@ class Monitor(Wrapper):
         :param info_keywords: (tuple) extra information to log, from the information return of environment.step
         """
         Wrapper.__init__(self, env=env)
+        self.modified = modified
         self.t_start = time.time()
         if filename is None:
             self.file_handler = None
@@ -44,7 +45,7 @@ class Monitor(Wrapper):
                                          fieldnames=('r', 'l', 't') + reset_keywords + info_keywords)
             self.logger.writeheader()
             self.file_handler.flush()
-            if Monitor.modified:
+            if self.modified:
                 self.file_handler.close()
                 self.delete_vars_for_pickle()
 
@@ -52,7 +53,7 @@ class Monitor(Wrapper):
         self.reset_keywords = reset_keywords
         self.info_keywords = info_keywords
         self.allow_early_resets = allow_early_resets
-        self.rewards = None
+        self.rewards = []
         self.needs_reset = True
         self.episode_rewards = []
         self.episode_lengths = []
@@ -104,7 +105,7 @@ class Monitor(Wrapper):
         #     raise RuntimeError("Tried to step environment that needs reset")
         if self.needs_reset :
             print("Tried to step environment that needs reset")
-            observation, reward, done, info = self.env.reset()
+            self.env.reset()
         observation, reward, done, info = self.env.step(action)
         self.rewards.append(reward)
         if done:
@@ -118,12 +119,12 @@ class Monitor(Wrapper):
             self.episode_lengths.append(eplen)
             self.episode_times.append(time.time() - self.t_start)
             ep_info.update(self.current_reset_info)
-            if Monitor.modified:
+            if self.modified:
                 self.open_file()
             if self.logger:
                 self.logger.writerow(ep_info)
                 self.file_handler.flush()
-            if Monitor.modified:
+            if self.modified:
                 self.delete_vars_for_pickle()
             info['episode'] = ep_info
         self.total_steps += 1
