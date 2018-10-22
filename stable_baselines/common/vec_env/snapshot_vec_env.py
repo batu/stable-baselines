@@ -21,7 +21,7 @@ class SnapshotVecEnv(VecEnv):
     :param env_fns: ([Gym Environment]) the list of environments to vectorize
     """
 
-    def __init__(self, env_fns, snapshot_save_prob=0, snapshot_load_prob=0, verbose=1, visualize=False):
+    def __init__(self, env_fns, snapshot_save_prob=0, snapshot_load_prob=0, verbose=1, visualize=False, human_snapshots=False, training_len=0):
         self.envs = [fn() for fn in env_fns]
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
@@ -57,8 +57,22 @@ class SnapshotVecEnv(VecEnv):
         self.snapshot_buffer = deque(maxlen=10)
         self.snapshot_buffer.append(self.get_snapshot())
 
+        #Human snapshot part
+        self.human_snapshots = human_snapshots
+        self.training_len = training_len
+        self.num_snapshots = 30
+        self.timestep = 0
+        if human_snapshots:
+            load_snapshots_from_folder()
     # From https://github.com/openai/gym/pull/575
 
+
+    def load_snapshots_from_folder(path="/home/batu/Desktop/TrainingCamp/stable-baseline/HumanSnapshots/MountainCar", num_snapshots=30):
+        self.snapshot_buffer = []
+        self.snapshot_buffer.append(self.get_snapshot())
+        for i in range(num_snapshots):
+            snapshot = cloudpickle.load(open(f"{path}/{i}.p", "rb"))
+            self.snapshot_buffer.append(snapshot)
 
     def save_snapshot(self, env_id=0):
         # start_time = time.time()
@@ -109,12 +123,15 @@ class SnapshotVecEnv(VecEnv):
         self.actions = actions
 
     def step_wait(self):
+        self.timestep += 1
         for env_idx in range(self.num_envs):
             obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
                 self.envs[env_idx].step(self.actions[env_idx])
 
             if self.visualize:
                 self.envs[env_idx].render()
+
+
 
             if (np.random.random() < self.snapshot_save_prob) and (not self.buf_dones[env_idx]):
                 self.save_snapshot(env_idx)
@@ -124,7 +141,30 @@ class SnapshotVecEnv(VecEnv):
                 # This code is for Physics based environments
                 # If we can get the state and the load prob kicked in
                 if self.is_env_atari:
-                    if (not self.first_time and np.random.random() < self.snapshot_load_prob):
+
+                    # Human demonstratin snapshot.
+                    if self.human_snapshots and not self.first_time and np.random.random() < self.snapshot_load_prob:
+                        self.first_time = False
+                        index = (self.timestep / self.training_len) * self.num_snapshots
+                        index = int(index)
+                        print(index)
+                        snapshot = self.snapshot_buffer[index]
+                        self.load_snapshot(snapshot, env_idx)
+
+                        self.envs[env_idx].env.env.env.env.env.needs_reset = False;
+                        self.envs[env_idx].env.env.env.env.env.rewards = []
+
+                        #Reaching into TimeLimit
+                        self.envs[env_idx].env.env.env.env.env.env.env.env._episode_started_at = time.time()
+                        self.envs[env_idx].env.env.env.env.env.env.env.env._elapsed_steps = 0
+
+                        obs, self.buf_rews[env_idx], self.buf_dones[env_idx], self.buf_infos[env_idx] =\
+                            self.envs[env_idx].step(0)
+
+                        if type(obs) == type(None):
+                            obs = self.envs[env_idx].reset()
+
+                    elif (not self.first_time and np.random.random() < self.snapshot_load_prob):
                         self.first_time = False
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
