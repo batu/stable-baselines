@@ -3,6 +3,7 @@ from collections import deque
 import inspect
 import sys
 
+import random
 import numpy as np
 from gym import spaces
 
@@ -11,6 +12,7 @@ from pickle import dumps,loads
 import cloudpickle
 from collections import namedtuple
 
+from scipy.spatial import distance
 from . import VecEnv
 
 
@@ -21,7 +23,7 @@ class SnapshotVecEnv(VecEnv):
     :param env_fns: ([Gym Environment]) the list of environments to vectorize
     """
 
-    def __init__(self, env_fns, snapshot_save_prob=0, snapshot_load_prob=0, verbose=1, visualize=False, human_snapshots=False, training_len=0):
+    def __init__(self, env_fns, rrt=False, snapshot_save_prob=0, snapshot_load_prob=0, verbose=1, visualize=False, human_snapshots=False, training_len=0, snapshot_usage_percentage=1):
         self.envs = [fn() for fn in env_fns]
         env = self.envs[0]
         VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space)
@@ -47,7 +49,11 @@ class SnapshotVecEnv(VecEnv):
         self.buf_infos = [{} for _ in range(self.num_envs)]
         self.actions = None
 
-        self.is_env_atari = "AtariEnv" in str(self.envs[0].unwrapped)
+        try:
+            self.is_env_atari = "AtariEnv" in str(self.envs[0].unwrapped)
+        except:
+            self.is_env_atari = False
+
         self.snapshot_save_prob = snapshot_save_prob
         self.snapshot_load_prob = snapshot_load_prob
         self.first_time = True
@@ -61,14 +67,43 @@ class SnapshotVecEnv(VecEnv):
         self.human_snapshots = human_snapshots
         self.training_len = training_len
         self.num_snapshots = 30
+        self.snapshot_usage_percentage = snapshot_usage_percentage
         self.timestep = 0
         if human_snapshots:
             print("Loading Snapshots from human demonstration.")
-            self.load_snapshots_from_folder()
+            self.load_snapshots_from_folder(num_snapshots=self.num_snapshots)
+        if rrt:
+            self.rrt()
+            exit()
     # From https://github.com/openai/gym/pull/575
 
 
-    def load_snapshots_from_folder(self, path="/home/batu/Desktop/TrainingCamp/stable-baseline/HumanSnapshots/MountainCar", num_snapshots=30):
+    def rrt(self, max_iterations=1000000):
+        def pick_random_state():
+            x = random.uniform(-1.2, 0.6)
+            y = random.uniform(-0.07, 0.076)
+            return (x,y)
+
+        self.snapshot_buffer = []
+        observation = self.envs[0].reset()
+        self.state_buffer = [observation]
+        for iteration in range(max_iterations):
+            rand_state = pick_random_state()
+            closest_state = min(self.state_buffer, key=lambda i: distance.sqeuclidean(i, rand_state))
+            self.envs[0].unwrapped.state = closest_state
+            random_action = self.envs[0].action_space.sample()
+            print(iteration)
+            for _ in range(1):
+                observation, reward, done, info  = self.envs[0].step(random_action)
+                if observation[0] > 0.5:
+                    print("DAMN!")
+                    exit()
+            # self.envs[0].unwrapped.render()
+            self.state_buffer.append(observation)
+            if done:
+                observation = self.envs[0].reset()
+
+    def load_snapshots_from_folder(self, path="/home/batu/Desktop/TrainingCamp/stable-baseline/HumanSnapshots/MountainCar", num_snapshots=29):
         self.snapshot_buffer = []
         # self.snapshot_buffer.append(self.get_snapshot())
         for i in range(num_snapshots):
@@ -114,6 +149,7 @@ class SnapshotVecEnv(VecEnv):
         #self.envs[0].render() #close popup windows since we can't load into them
         # self.envs[env_id].close()
         # start_time = time.time()
+        print("I AM LOADING")
         self.envs[env_id].env = loads(snapshot)
         # print (time.time() - start_time, 's in LOAD')
 
@@ -175,9 +211,20 @@ class SnapshotVecEnv(VecEnv):
                 else:
                     if self.human_snapshots and (not self.first_time) and (np.random.random() < self.snapshot_load_prob):
                         self.first_time = False
-                        index = (self.timestep / self.training_len) * self.num_snapshots
+                        #index = (self.timestep / (self.training_len * self.snapshot_usage_percentage)) * self.num_snapshots
+                        index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         index = int(index)
-                        snapshot = self.snapshot_buffer[index]
+                        print(index)
+                        if index >= len(self.snapshot_buffer):
+                            index = len(self.snapshot_buffer) - 1
+                        try:
+                            snapshot = self.snapshot_buffer[index]
+                        except:
+                            print("BORKED INDEX ERROR!")
+                            print(index)
+                            print(len(self.snapshot_buffer))
+                            snapshot = self.snapshot_buffer[index-1]
+
                         self.envs[env_idx].unwrapped.state = snapshot
                         obs = snapshot
 
@@ -193,13 +240,23 @@ class SnapshotVecEnv(VecEnv):
                             print("OBS IS ZERO")
                             obs = self.envs[env_idx].reset()
 
-                    elif (not self.first_time and np.random.random() < self.snapshot_load_prob):
+                    elif not self.human_snapshots and (not self.first_time and np.random.random() < self.snapshot_load_prob):
                         self.first_time = False
                         index = np.random.choice(range(len(list(self.snapshot_buffer))))
                         snapshot = self.snapshot_buffer[index]
+                        # print(snapshot)
+                        # print(index)
+                        # print(len(self.snapshot_buffer))
                         self.load_snapshot(snapshot, env_idx)
-                        self.envs[env_idx].env._episode_started_at = time.time()
-                        self.envs[env_idx].env._elapsed_steps = 0
+                        self.envs[env_idx].env.env._episode_started_at = time.time()
+                        self.envs[env_idx].env.env._elapsed_steps = 0
+
+                        self.envs[env_idx].needs_reset = False;
+                        self.envs[env_idx].rewards = []
+
+                        self.envs[env_idx].env.needs_reset = False;
+                        self.envs[env_idx].env.rewards = []
+
 
                         # print(f"Snapshot index {index} was chosen with state \n{obs}")
                         obs = self.envs[env_idx].unwrapped.state
@@ -221,7 +278,7 @@ class SnapshotVecEnv(VecEnv):
     def reset(self):
         for env_idx in range(self.num_envs):
             obs = self.envs[env_idx].reset()
-            print(self.envs[0])
+            # print(self.envs[0])
             self._save_obs(env_idx, obs)
         return np.copy(self._obs_from_buf())
 
